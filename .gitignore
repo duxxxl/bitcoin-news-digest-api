@@ -1,0 +1,6 @@
+.env
+venv/
+__pycache__/
+*.pyc
+data/latest_digest.json
+.pytest_cache/
