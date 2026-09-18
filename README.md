@@ -1,8 +1,16 @@
 # Bitcoin News Digest API
 
+[![CI](https://github.com/duxxxl/bitcoin-news-digest-api/actions/workflows/ci.yml/badge.svg)](https://github.com/duxxxl/bitcoin-news-digest-api/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.11-blue)
+![FastAPI](https://img.shields.io/badge/FastAPI-Docker-009688)
+
+**Live:** https://bitcoin-news-digest-api.onrender.com · [API-Doku (`/docs`)](https://bitcoin-news-digest-api.onrender.com/docs) · [Health](https://bitcoin-news-digest-api.onrender.com/health)
+
+> Gehostet im Free-Tier von Render: Nach Inaktivität schläft der Container ein, die erste Anfrage kann daher ~1 Minute dauern.
+
 Eine REST-API, die mit einem **Multi-Agent-System** einen kurzen, täglichen **Bitcoin-News-Digest** erzeugt: Ein Orchestrator-Agent delegiert an spezialisierte Sub-Agenten (News-Recherche, Community-Stimmung), prüft deren Ergebnisse gegeneinander und schreibt daraus einen strukturierten Digest mit Quellenangaben und Video-Ideen.
 
-Projekt 4 der [AI-Engineering-Roadmap](../ROADMAP.md) — Fokus: **Deployment / MLOps** (FastAPI → Docker → CI → Hosting) plus **Multi-Agent-Architektur**. Baut auf dem [research-agent](../research-agent) auf und ist zugleich der erste Baustein einer Bitcoin-YouTube-Automatisierung.
+Projekt 4 meiner AI-Engineering-Roadmap — Fokus: **Deployment / MLOps** (FastAPI → Docker → CI → Hosting) plus **Multi-Agent-Architektur**. Baut auf dem [research-agent](https://github.com/duxxxl/research-agent) auf und ist zugleich der erste Baustein einer Bitcoin-YouTube-Automatisierung.
 
 ## Was es kann
 
@@ -21,6 +29,9 @@ specialists.py    Die Sub-Agenten mit je eigener ReAct-Schleife
 tools.py          Die Werkzeuge, gruppiert pro Spezialist
 .env              Konfiguration: API-Key + beobachtete Accounts (nicht im Git)
 tests/            Tests ohne API-Key/Netz (LLM- und HTTP-Calls sind gemockt)
+Dockerfile        Container-Image (python:3.11-slim, uvicorn)
+.dockerignore     Hält venv, .env, Tests-Cache & Co. aus dem Image
+.github/workflows/ci.yml   GitHub Actions: pytest bei jedem Push/PR
 ```
 
 Hierarchie zur Laufzeit:
@@ -114,11 +125,51 @@ curl -X POST http://127.0.0.1:8000/digest -H "Content-Type: application/json" -d
 pytest
 ```
 
-Die Tests brauchen keinen API-Key und keinen Netzzugang — der LLM-Aufruf ist durch einen Fake ersetzt. Genau diese Tests laufen später automatisch per GitHub Actions (CI).
+21 Tests (API-Endpunkte + Tools). Sie brauchen keinen API-Key und keinen Netzzugang — LLM- und HTTP-Aufrufe sind durch Fakes ersetzt. Deshalb laufen sie auch ohne Secrets in der CI.
 
-## Nächste Schritte (Deployment)
+## Deployment
 
-- [ ] Dockerfile hinzufügen und Container lokal testen
-- [ ] GitHub Actions: `pytest` bei jedem Push automatisch ausführen
-- [ ] Auf Render/Fly.io hosten
+Der Weg vom Code zur öffentlich erreichbaren API:
+
+```
+git push  ->  GitHub Actions (pytest)  ->  Render baut das Dockerfile  ->  https://bitcoin-news-digest-api.onrender.com
+```
+
+### 1. Docker
+
+```bash
+docker build -t bitcoin-news-digest-api .
+docker run --rm -p 8000:8000 --env-file .env bitcoin-news-digest-api
+```
+
+Das Dockerfile kopiert zuerst nur `requirements.txt` und installiert die Abhängigkeiten, erst danach den restlichen Code. So bleibt der langsame `pip install`-Schritt im Build-Cache, solange sich die Abhängigkeiten nicht ändern. Der Port kommt aus `$PORT` (setzen Hoster wie Render selbst), lokal fällt er auf 8000 zurück. Secrets landen **nicht** im Image — `.env` steht in `.dockerignore` und wird zur Laufzeit übergeben.
+
+### 2. CI mit GitHub Actions
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) läuft bei jedem Push auf `main` und bei jedem Pull Request: Python 3.11 aufsetzen, Abhängigkeiten installieren (mit pip-Cache), `pytest -q`. Der Status steht im Badge oben.
+
+### 3. Hosting auf Render
+
+Render ist mit dem Repo verbunden und baut bei jedem Push auf `main` das Dockerfile neu. Konfiguration:
+
+| Einstellung | Wert |
+|---|---|
+| Runtime | Docker (Dockerfile im Repo-Root) |
+| Plan | Free |
+| Health-Check | `/health` |
+| Environment | `ANTHROPIC_API_KEY` (plus optional die `*_ACCOUNTS`-Variablen aus `.env.example`) |
+
+Bekannte Einschränkungen des Free-Setups:
+
+- **Cold Start:** Der Container schläft nach Inaktivität ein; die erste Anfrage weckt ihn auf.
+- **Kein dauerhafter Speicher:** `data/latest_digest.json` liegt im Container-Dateisystem und ist nach jedem Neustart/Deploy weg. `GET /digest/latest` liefert dann 404, bis wieder ein Digest erzeugt wurde.
+- **`POST /digest` braucht einen gültigen API-Key** in den Render-Umgebungsvariablen; ohne ihn antwortet der Endpunkt mit 502. `/health`, `/` und `/docs` funktionieren immer.
+
+## Nächste Schritte
+
+- [x] Dockerfile hinzufügen und Container lokal testen
+- [x] GitHub Actions: `pytest` bei jedem Push automatisch ausführen
+- [x] Auf Render hosten
 - [ ] Scheduler: einmal täglich automatisch einen Digest erzeugen
+- [ ] Persistenz: `latest_digest.json` durch PostgreSQL ersetzen (später optional Redis als Cache)
+- [ ] Zum Lernen: dieselbe API auf AWS (ECS Fargate + Application Load Balancer) deployen
